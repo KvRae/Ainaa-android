@@ -2,13 +2,11 @@ package com.mafazaa.ainaa.service
 
 import android.app.AlarmManager
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
-import android.util.Log
 import com.mafazaa.ainaa.AppActivity
 import com.mafazaa.ainaa.data.local.SharedPrefs
 import com.mafazaa.ainaa.domain.models.DnsProtectionLevel
@@ -42,7 +40,6 @@ class MyVpnService : VpnService() {
     override fun onCreate() {
         try {
             super.onCreate()
-            MyNotificationManager.startForegroundService(this)
             VpnMonitorJobService.scheduleJob(this)
             scheduleWatchdog()
             MyLog.i(TAG, "VPN service created, monitor job and watchdog scheduled")
@@ -60,6 +57,9 @@ class MyVpnService : VpnService() {
                 }
 
                 else -> {
+                    // Start foreground immediately to satisfy Android requirements
+                    MyNotificationManager.startForegroundService(this)
+
                     val level = sharedPrefs.dnsProtectionLevel
                     startVpn(level)
                     START_STICKY
@@ -101,6 +101,10 @@ class MyVpnService : VpnService() {
                 return
             }
             isRunning = true
+            MyLog.d(TAG, "VPN interface established successfully")
+
+            // Notify that VPN is now fully operational
+            MyNotificationManager.updateServiceState(this)
         } catch (e: Exception) {
             MyLog.e(TAG, "Error in startVpn: ${e.message}", e)
             stopSelf()
@@ -113,7 +117,7 @@ class MyVpnService : VpnService() {
             vpnInterface?.close()
             vpnInterface = null
             isRunning = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            MyNotificationManager.stopForegroundService(this)
             stopSelf()
         } catch (e: Exception) {
             MyLog.e(TAG, "Error in stopVpn: ${e.message}", e)
@@ -124,6 +128,9 @@ class MyVpnService : VpnService() {
         try {
             MyLog.w(TAG, "VPN service being destroyed, scheduling restart")
             isRunning = false
+
+            // Notify that VPN service is stopping
+            MyNotificationManager.stopForegroundService(this)
 
             // Send broadcast to restart VPN service if needed
             if (hasVpnPermission()) {

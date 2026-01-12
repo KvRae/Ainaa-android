@@ -47,6 +47,10 @@ fun SupportUsBottomSheet(
     description: String = stringResource(R.string.support_us_message),
     onDismiss: () -> Unit = {},
     sheetState: SheetState = rememberModalBottomSheetState(),
+    amount: String = "",
+    onAmountChange: (String) -> Unit = {},
+    paymentMethod: Int = 0,
+    onPaymentMethodChange: (Int) -> Unit = {}
 ) {
     ModalBottomSheet(
         sheetState = sheetState,
@@ -69,10 +73,15 @@ fun SupportUsBottomSheet(
                 color = MaterialTheme.colorScheme.onTertiary
             )
             Spacer(Modifier.height(16.dp))
-            PaymentForm()
+            PaymentForm(
+                amount = amount,
+                onAmountChange = { onAmountChange(it) },
+                paymentMethod = paymentMethod,
+                onPaymentMethodChange = { onPaymentMethodChange(it) }
+            )
             Spacer(Modifier.height(16.dp))
             CustomFilledButton(
-                isEnabled = false,
+                isEnabled = if (amount.isEmpty() && paymentMethod==0) false else true,
                 onCLick = onDismiss,
                 text = stringResource(R.string.support_devs),
                 icon = painterResource(R.drawable.external_link_icon)
@@ -97,6 +106,8 @@ fun PaymentForm(
     modifier: Modifier = Modifier,
     amount: String = "",
     onAmountChange: (String) -> Unit = {},
+    paymentMethod: Int = 0,
+    onPaymentMethodChange: (Int) -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedIndex = remember { mutableStateOf<Int?>(0) }
@@ -142,6 +153,7 @@ fun PaymentForm(
                         text = { Text(stringResource(paymentMethod)) },
                         onClick = {
                             selectedIndex.value = paymentMethods.indexOf(paymentMethod)
+                            onPaymentMethodChange(paymentMethod)
                             expanded = false
                         }
                     )

@@ -29,14 +29,11 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.rememberSavedStateNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.rememberSceneSetupNavEntryDecorator
-import com.mafazaa.ainaa.data.local.SharedPrefs
 import com.mafazaa.ainaa.data.models.NetworkResult
 import com.mafazaa.ainaa.domain.models.DnsProtectionLevel
 import com.mafazaa.ainaa.domain.models.PermissionState
 import com.mafazaa.ainaa.domain.models.UpdateState
 import com.mafazaa.ainaa.navigation.Screen
-import com.mafazaa.ainaa.service.MyAccessibilityService
-import com.mafazaa.ainaa.service.MyAccessibilityService.Companion.startAccessibilityService
 import com.mafazaa.ainaa.ui.common.EnableProtectionBottomSheet
 import com.mafazaa.ainaa.ui.common.MainDrawer
 import com.mafazaa.ainaa.ui.common.OkDialog
@@ -44,35 +41,27 @@ import com.mafazaa.ainaa.ui.common.SupportUsBottomSheet
 import com.mafazaa.ainaa.ui.common.TopBar
 import com.mafazaa.ainaa.ui.dialog.BlockAppDialog
 import com.mafazaa.ainaa.ui.dialog.ConfirmBlockedDialog
-import com.mafazaa.ainaa.ui.dialog.EnableProtectionDialog
 import com.mafazaa.ainaa.ui.dialog.HowItWorksDialog
 import com.mafazaa.ainaa.ui.dialog.PermissionDialog
 import com.mafazaa.ainaa.ui.dialog.ReportProblemDialog
 import com.mafazaa.ainaa.ui.protection.EnableProtectionScreen
 import com.mafazaa.ainaa.ui.protection.ProtectionActivatedScreen
-import com.mafazaa.ainaa.ui.support.SupportScreen
-import com.mafazaa.ainaa.utils.Constants.JOIN_URL
 import com.mafazaa.ainaa.utils.Constants.SAFE_SEARCH_URL
 import com.mafazaa.ainaa.utils.Constants.SUPPORT_CONTACT_URL
-import com.mafazaa.ainaa.utils.Constants.SUPPORT_URL
-import com.mafazaa.ainaa.utils.ExternalAppsAndLink
 import com.mafazaa.ainaa.utils.installApk
 import com.mafazaa.ainaa.utils.openUrl
-import com.mafazaa.ainaa.utils.shareFile
-import com.mafazaa.ainaa.utils.startVpnService
 import com.mafazaa.ainaa.viewmodels.AppViewModel
 import kotlinx.coroutines.launch
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainRoot(
     context: Context = LocalContext.current,
     viewModel: AppViewModel,
-    sharedPrefs: SharedPrefs,
     dialogState: DialogState?,
     onDialogStateChange: (DialogState?) -> Unit,
     grantPermission: (PermissionState) -> Unit,
-    findNextMissingPermission: () -> PermissionState?,
     permissionDialogChecker: @Composable () -> Unit,
     selectedLevel: DnsProtectionLevel = DnsProtectionLevel.NONE,
     onSelectedLevelChange: (DnsProtectionLevel) -> Unit = {}
@@ -136,7 +125,9 @@ fun MainRoot(
                                                 is UpdateState.Failed, UpdateState.NoUpdate -> {
                                                     viewModel.handleUpdateStatus()
                                                 }
-                                                else -> {}
+                                                else -> {
+
+                                                }
                                             }
                                         },
                                         updateState = viewModel.updateState.value,
@@ -144,18 +135,7 @@ fun MainRoot(
                                     )
                                 }
 
-                                Screen.Support -> NavEntry(key) {
-                                    SupportScreen(
-                                        onSupportClick = { ExternalAppsAndLink.openLinkInBrowser(context,SUPPORT_URL) },
-                                        onJoinClick = { ExternalAppsAndLink.openLinkInBrowser(context,JOIN_URL) },
-                                        onShareLogFile = { context.shareFile(viewModel.getLogFile()) },
-                                        onStopBlocking = { context.startAccessibilityService(MyAccessibilityService.ACTION_STOP) },
-                                        onOpenScreenShotWindow = {
-                                            viewModel.showScreenshotOverlay(true)
-
-                                        }
-                                    )
-                                }
+                                Screen.Support -> NavEntry(key) {}
 
                                 Screen.EnableProtection -> NavEntry(key) {
                                     EnableProtectionScreen(
@@ -172,13 +152,23 @@ fun MainRoot(
                                                 }
                                                 return@EnableProtectionScreen
                                             }
+
+                                            // Check and request missing permissions
+                                            viewModel.refreshPermissionState()
+                                            if (viewModel.permissionState != PermissionState.Granted) {
+                                                // Show permission dialog for the missing permission
+                                                onDialogStateChange(DialogState.Permission(viewModel.permissionState!!))
+                                                return@EnableProtectionScreen
+                                            }
+
                                             onSelectedLevelChange(level)
-                                            viewModel.setProtectionSheet(true)
+                                            viewModel.showProtectionSheet = true
                                         },
                                         selectedLevel = selectedLevel,
+                                        onSelectedLevelChange = onSelectedLevelChange,
                                         supportUs = {
                                             uiScope.launch {
-                                                viewModel.setSupportSheet(true)
+                                                viewModel.showSupportSheet = true
                                             }
                                         }
                                     )
@@ -189,19 +179,34 @@ fun MainRoot(
                     if (viewModel.showSupportSheet) {
                         SupportUsBottomSheet(
                             onDismiss = {
-                                viewModel.setSupportSheet(false)
+                                viewModel.showSupportSheet = false
                             },
-                            sheetState = sheetState
+                            sheetState = sheetState,
+                            amount = viewModel.supportAmount.toString(),
+                            onAmountChange = { viewModel.supportAmount = it.toInt() },
+                            paymentMethod = viewModel.paymentMethod
                         )
                     }
                     if(viewModel.showProtectionSheet){
                         EnableProtectionBottomSheet(
-                            onDismiss = { viewModel.setProtectionSheet(false) },
+                            title = if (selectedLevel == DnsProtectionLevel.HIGH)
+                                stringResource(R.string.enable_protection_lvl_high_text)
+                            else stringResource(R.string.enable_protection_lvl_low_text),
+                            onDismiss = { viewModel.showProtectionSheet = false },
                             sheetState = sheetState,
+                            viewModel = viewModel,
                             onConfirm = {
-                                onDialogStateChange(DialogState.EnableProtectionConfirm(selectedLevel))
-                                backStack.add(Screen.ProtectionActivated)
-                                viewModel.setProtectionSheet(false)
+                                // Close the bottom sheet
+                                viewModel.showProtectionSheet = false
+
+                                // Save the selected protection level
+                                viewModel.saveLevel(selectedLevel)
+
+                                // Directly check permissions and activate protection
+                                viewModel.checkPermissionsAndActivateProtection(
+                                    backStack = backStack,
+                                    onDialogStateChange = onDialogStateChange
+                                )
                             }
                         )
                     }
@@ -293,31 +298,6 @@ fun MainRoot(
             )
         }
 
-        is DialogState.EnableProtectionConfirm -> {
-            EnableProtectionDialog(
-                onConfirm = {
-                    onDialogStateChange(null)// Close the confirmation dialog
-                    viewModel.saveLevel(dialogState.level)
-
-                    val nextPermission = findNextMissingPermission()
-                    if (nextPermission == null) {
-                        // All permissions are already granted! Activate protection.
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.protection_activated_text),
-                            Toast.LENGTH_LONG
-                        ).show()
-                        context.startAccessibilityService(MyAccessibilityService.ACTION_START_FOREGROUND)
-                        context.startVpnService( MyAccessibilityService.ACTION_START_FOREGROUND)
-                        backStack.add(Screen.ProtectionActivated)
-                        backStack.remove(Screen.EnableProtection)
-                    } else {
-                        onDialogStateChange(DialogState.Permission(nextPermission))
-                    }
-                },
-                onDismiss = { onDialogStateChange(null)}
-            )
-        }
         else -> {}
     }
 

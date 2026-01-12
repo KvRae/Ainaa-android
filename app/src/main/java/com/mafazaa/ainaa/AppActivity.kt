@@ -12,7 +12,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -23,16 +22,12 @@ import androidx.core.view.ViewCompat.setLayoutDirection
 import androidx.lifecycle.lifecycleScope
 import com.mafazaa.ainaa.data.local.SharedPrefs
 import com.mafazaa.ainaa.domain.models.AppInfo
-import com.mafazaa.ainaa.domain.models.DnsProtectionLevel
 import com.mafazaa.ainaa.domain.models.PermissionState
 import com.mafazaa.ainaa.helpers.LocaleHelper
-import com.mafazaa.ainaa.navigation.Screen
 import com.mafazaa.ainaa.receiver.AppDeviceAdminReceiver
-import com.mafazaa.ainaa.service.MyAccessibilityService
 import com.mafazaa.ainaa.ui.theme.AinaaTheme
 import com.mafazaa.ainaa.utils.MyLog
 import com.mafazaa.ainaa.utils.getAllApps
-import com.mafazaa.ainaa.utils.isServiceRunning
 import com.mafazaa.ainaa.utils.requestAccessibilityPermission
 import com.mafazaa.ainaa.utils.requestAdminPermission
 import com.mafazaa.ainaa.utils.requestDrawOverlaysPermission
@@ -53,10 +48,7 @@ sealed interface DialogState {
     data class BlockApps(val confirmApp: AppInfo? = null) : DialogState
     data object HowItWorks : DialogState
     data object BlockWords : DialogState
-    data class EnableProtectionConfirm(val level: DnsProtectionLevel) :
-        DialogState
 }
-
 
 class AppActivity : ComponentActivity() {
     var dialogState by mutableStateOf<DialogState?>(if (MyApp.isFirstTime) DialogState.FirstTime else null)
@@ -70,10 +62,7 @@ class AppActivity : ComponentActivity() {
     }
     private val requestAdmin = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    )
-    {
-        // Handle result if needed
-    }
+    ) {}
     val viewModel: AppViewModel by lazy {
         getViewModel<AppViewModel>()
     }
@@ -94,159 +83,33 @@ class AppActivity : ComponentActivity() {
         viewModel.loadInstalledApps(getAllApps())
         viewModel.loadBlockedWords()
         MyLog.i(TAG, "Opening app")
-        //viewModel.handleUpdateStatus()
         viewModel.refreshPermissionState()
 
-        requestAdminPermission(adminReceiver, requestAdmin)
 
         setContent {
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            // Use adaptive layout direction based on system locale
+            val composeLayoutDirection = if (isRtl) {
+                LayoutDirection.Rtl
+            } else {
+                LayoutDirection.Ltr
+            }
+
+            CompositionLocalProvider(LocalLayoutDirection provides composeLayoutDirection) {
                 AinaaTheme {
                     MainRoot(
                         viewModel = viewModel,
-                        sharedPrefs = sharedPrefs,
                         dialogState = dialogState,
                         onDialogStateChange = { dialogState = it },
                         grantPermission = { permissionState -> grantPermission(permissionState) },
-                        findNextMissingPermission = { viewModel.permissionState },
-                        permissionDialogChecker = {}
+                        permissionDialogChecker = {},
+                        selectedLevel = viewModel.selectedLevel,
+                        onSelectedLevelChange = { viewModel.selectedLevel = it }
                     )
                 }
             }
         }
 
     }
-
-    @Composable
-    private fun MainRoot(
-        context: Context = LocalContext.current,
-        viewModel: AppViewModel,
-        sharedPrefs: SharedPrefs,
-    ) {
-        val snackbarHostState = remember { SnackbarHostState() }
-        val apps = viewModel.apps.collectAsState().value
-        val blockedWords = viewModel.blockedWords.collectAsState().value
-
-        // Centralized dialogs rendering
-        when (val d = dialogState) {
-            is DialogState.ReportProblem -> {
-                ReportProblemDialog(
-                    onClose = { dialogState = null },
-                    onSubmit = { report ->
-                        viewModel.submitReport(report) {
-                            when (it) {
-                                NetworkResult.Success -> {
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.report_sent_message),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-
-                                is NetworkResult.Error -> {
-                                    Toast.makeText(
-                                        context,
-                                        getString(R.string.report_send__faild_message, '$'),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-
-                                else -> {}
-                            }
-                        }
-                        dialogState = null
-                    }
-                )
-            }
-
-            is DialogState.FirstTime -> {
-                OkDialog(
-                    title = stringResource(R.string.test_version_text),
-                    message = stringResource(R.string.test_version_message).trimIndent(),
-                    onDismiss = {
-                        dialogState = null
-                        MyApp.isFirstTime = false
-                    }
-                )
-            }
-
-            is DialogState.Permission -> {
-                PermissionDialog(
-                    permissionState = d.permission,
-                    onDismiss = { dialogState = null },
-                    onClick = {
-                        grantPermission(d.permission)
-                        dialogState = null
-                    }
-                )
-            }
-
-            is BlockApps -> {
-                BlockAppDialog(
-                    onDismiss = { dialogState = null },
-                    appStates = apps,
-                    onBlockClick = { app ->
-                        dialogState = BlockApps(confirmApp = app)
-                    }
-                )
-                if (d.confirmApp != null) {
-                    ConfirmBlockedDialog(
-                        app = d.confirmApp,
-                        onDismiss = { dialogState = BlockApps() },
-                        onConfirm = {
-                            viewModel.toggleAppSelection(it.packageName)
-                            dialogState = BlockApps()
-                        }
-                    )
-                }
-            }
-
-            is DialogState.HowItWorks -> {
-                HowItWorksDialog(
-                    onDismiss = { dialogState = null },
-                    onContactClicked = { context.openUrl(SUPPORT_CONTACT_URL) },
-                    onSafeSearchClicked = { context.openUrl(SAFE_SEARCH_URL) },
-                    image = stringResource(R.string.howtoknow_asset).toUri()
-                )
-            }
-
-            is DialogState.EnableProtectionConfirm -> {
-                EnableProtectionDialog(
-                    onConfirm = {
-                        dialogState = null // Close the confirmation dialog
-                        viewModel.saveLevel(d.level)
-                        refreshPermissionState()
-                        if (permissionState == null) {
-                            // All permissions are already granted! Activate protection.
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.protection_activated_text),
-                                Toast.LENGTH_LONG
-                            ).show()
-                            startAccessibilityService(MyAccessibilityService.ACTION_START_FOREGROUND)
-                            startVpnService(MyVpnService.ACTION_START)
-                            backStack.add(Screen.ProtectionActivated)
-                            backStack.remove(Screen.EnableProtection)
-                        } else {
-                            dialogState = DialogState.Permission(permissionState!!)
-                        }
-                    },
-                    onDismiss = { dialogState = null }
-                )
-            }
-
-            DialogState.BlockWords -> {
-                ManageKeywordsDialog(
-                    keywords = blockedWords.toSet(),
-                    onDismiss = { dialogState = null },
-                    onAddKeyword = { viewModel.addBlockedWord(it) },
-                    onRemoveKeyword = {})
-
-            }
-
-
-
-
 
     override fun onResume() {
         super.onResume()
@@ -271,7 +134,14 @@ class AppActivity : ComponentActivity() {
             PermissionState.Vpn -> requestVpnPermission()
             PermissionState.Overlay -> requestDrawOverlaysPermission()
             PermissionState.Accessibility -> requestAccessibilityPermission()
-            PermissionState.Administrative -> requestAdminPermission(adminReceiver, requestAdmin)
+            PermissionState.Administrative -> {
+                // Only request admin permission if uninstall protection is enabled
+                if (viewModel.uninstallAppCheck) {
+                    requestAdminPermission(adminReceiver, requestAdmin)
+                } else {
+                    MyLog.w(TAG, "Admin permission requested but uninstallAppCheck is disabled")
+                }
+            }
             PermissionState.Granted -> {}
         }
     }
@@ -281,7 +151,8 @@ class AppActivity : ComponentActivity() {
     }
 
     override fun attachBaseContext(newBase: Context) {
-        val context = LocaleHelper.forceArabicLocale(newBase)
+        // Apply system locale (supports both Arabic and English)
+        val context = LocaleHelper.applySystemLocale(newBase)
         super.attachBaseContext(context)
     }
 }
